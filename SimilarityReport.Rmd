@@ -1,0 +1,629 @@
+---
+title: "Finding Similar Banks based on Public Data"
+author: "Mark Locatelli"
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 4
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 4
+  word_document: default
+Date Created: 6/5/2017
+---
+
+# Introduction
+
+In this project, we wanted to explore some objective methods for finding peer banks using publicly available data from the Federal Financial Institutions Examination Council (FFIEC).  Using their site for getting bulk downloads of the data (https://cdr.ffiec.gov/public/PWS/DownloadBulkData.aspx), we were able to get two files from the "Available Product": "Call Reports -- Balance Sheet, Income Statement, Past Due -- Four Periods".  These two files were supplemented with one file from the "Available Product": "Call Reports -- Single Period" that contained the details of the RC-C Part I section of the Call Report (this section gives the data for the institutions' loan portfolios).
+
+It is hoped that by looking at the size of the various institutions operations, we can find banks that do similar business as FHB.  The dimensions we will look at will include: Total Assets, Loans/Assets ratio, C&I/Loans, CRE/Loans, Mortgages/Loans, Deposits/Liabilities ratio, and Net Income/Assets ratio. These seven dimensions should help us identify institutions whose operations should resemble those of FHB.
+
+So, let us continue by loading these files and begining the analysis.
+
+
+```{r initializingdatasets}
+
+# echo=FALSE, warning=FALSE, include=FALSE - These flags define how code and 
+# output go into the generated report.
+
+# set the directory for the project
+setwd("\\\\fhb/dfs/Center-Users/mlocatelli/R-Projects/SimilarityScoreBank")
+  
+# read in the files from the bulk download
+FFIEC1 <- read.delim("FFIEC CDR Call Subset of Schedules 2017(1 of 2).txt")
+FFIEC2 <- read.delim("FFIEC CDR Call Subset of Schedules 2017(2 of 2).txt")
+
+# to get more details on the loan portfolios of the banks, let's grab RC-C Part I
+# from the "Call Reports -- Single Period" selector on the FFIEC website.
+FFIEC3 <- read.delim("FFIEC CDR Call Schedule RCCI 03312017.txt")
+
+# strip out the first row that contains descriptions of the line items
+FFIEC1a <- FFIEC1[-c(1), ]
+FFIEC2a <- FFIEC2[-c(1), ]
+FFIEC3a <- FFIEC3[-c(1), ]
+
+# merge the files into a single data set
+FFIECBulk1 <- merge(FFIEC1a, FFIEC2a)
+FFIECBulk2 <- merge(FFIECBulk1, FFIEC3a)
+
+# Reduce the list to a more interesting data set
+BankData <- FFIECBulk2[ , c("IDRSSD","Financial.Institution.Name",
+                            "Financial.Institution.State","RCFD2170","RCON2170",
+                            "RCON2122","RCON1766","RCON5367","RCON2200","RCON2948",
+                            "RIAD4340","RCON1460","RCONF158","RCONF159","RCONF160",
+                            "RCONF161","RIAD4135","RIAD4150","RIAD4079")]
+
+# Better names for the columns
+names(BankData) <- c("IDRSSD","Financial.Institution.Name",
+                     "Financial.Institution.State","RCFD.Total.Assets",
+                     "Total.Assets","Total.Loans","CI.Loans","Mortgages",
+                     "Total.Deposits","Total.Liabilities","Net.Income",
+                     "Multifamily","Res.Construction","Other.Construction",
+                     "Owner.Occ.CRE","NonOwner.CRE","Salary.Benefit.Expense",
+                     "Number.Employees","Total.NonInterest.Income")
+
+# List of variables that need to be coverted to numeric type:
+VariableList = c("RCFD.Total.Assets","Total.Assets","Total.Loans","CI.Loans",
+                 "Mortgages","Total.Deposits","Total.Liabilities","Net.Income",
+                 "Multifamily","Res.Construction", "Other.Construction",
+                 "Owner.Occ.CRE", "NonOwner.CRE","Salary.Benefit.Expense",
+                 "Number.Employees","Total.NonInterest.Income")
+
+# Convert data to numeric
+BankData[,VariableList] <- lapply(BankData[,VariableList], 
+                                  function(x) as.numeric(as.character(x)))
+
+# Define a "CRE" Portfolio Total:
+BankData[,"CRE"] = BankData[,"Multifamily"] + BankData[,"Res.Construction"] + 
+  BankData[,"Other.Construction"] + BankData[,"Owner.Occ.CRE"] + 
+  BankData[,"NonOwner.CRE"]
+ 
+
+```
+
+# Selecting and Preparing Key Metrics for Analysis
+
+The raw numbers from the reports do not contain the ratios we want to use for our analysis, and these variables all need to be scaled so that the weight of each variable in our analysis should be more easily calibrated and understood.
+
+To scale each variable, we will work with "normalized" or "standardized" versions of each variable. In this case, we will subtract the mean value from the variable, and divide by the standard deviation of the variable in our data set. This means that the normalized version of the variable will have an average value of zero, and that the value of each observation will be the number of standard deviations from average that value has. This is a useful scale to use for comparing companies across several dimensions at once, and should set all of the varibles to an equivalent scale.
+
+One item to note is that the use of the arithmentic mean and standard deviation works best when the variables are on a linear scale. For the ratios this should not be a problem, as all of the values should fall between one and zero. However, for the Total Assets, the values tend to vary exponentially between \$2 trillion and \$3 million. For this variable, we will take the natural logarithm of the assets and perform our analysis on LN(Total Assets).
+
+A last note, some of the banks in the data set have zero Total Loans.  In order to use Loans in the denominator for the specific portfolio comparisons, we will set Total Loans = 1 in cases where the real value is zero. Conveniently, these cases also have C&I, CRE, and Mortgage portfolios that also have zero dollars.
+
+
+```{r createkeyvariables}
+ 
+# Add some interesting Calculations
+# Log of Total Assets
+BankData[,"LNAssets"] = log(BankData[,"Total.Assets"])
+# Normalized version of Total Assets
+BankData[,"NormLNAssets"] = (BankData[,"LNAssets"] - mean(BankData[,"LNAssets"]))/
+  sd(BankData[,"LNAssets"])
+# Total Loans / Total Assets
+LoansToAssets = BankData[,"Total.Loans"]/BankData[,"Total.Assets"]
+BankData[,"NormLoanAssets"] = (LoansToAssets - mean(LoansToAssets))/
+  sd(LoansToAssets)
+# Setting Total.Loans = 0 to Total.Loans = 1 to use it in the denominator
+LoanMin <- 1
+BankData[BankData[,"Total.Loans"] < LoanMin, "Total.Loans"] = LoanMin
+# CI Loans / Total Loans
+CIRatio = BankData[,"CI.Loans"]/BankData[,"Total.Loans"]
+BankData[,"NormCIRatio"] = (CIRatio - mean(CIRatio))/sd(CIRatio)
+# CRE Ratio
+CRERatio = BankData[,"CRE"]/BankData[,"Total.Loans"]
+BankData[,"NormCRERatio"] = (CRERatio - mean(CRERatio))/sd(CRERatio)
+# Mortgages / Total Loans
+MortRatio = BankData[,"Mortgages"]/BankData[,"Total.Loans"]
+BankData[,"NormMortRatio"] = (MortRatio - mean(MortRatio))/sd(MortRatio)
+# Total Deposits / Total Liabilities
+DepositsToLiab = BankData[,"Total.Deposits"]/BankData[,"Total.Liabilities"]
+BankData[,"NormDepositsToLiab"] = (DepositsToLiab - mean(DepositsToLiab))/
+  sd(DepositsToLiab)
+# Net Income / Total Assets
+RoA = BankData[,"Net.Income"]/BankData[,"Total.Assets"]
+BankData[,"NormRoA"] = (RoA - mean(RoA))/sd(RoA)
+
+# Three more suggested measures:
+# Salary Expense / Total Assets
+SalaryRatio = BankData[,"Salary.Benefit.Expense"]/BankData[,"Total.Assets"]
+BankData[,"NormSalaryRatio"] = (SalaryRatio - mean(SalaryRatio))/sd(SalaryRatio)
+# Total Assets / Number of Employees
+EmployeeRatio = BankData[,"Number.Employees"]/BankData[,"Total.Assets"]
+BankData[,"NormEmpRatio"] = (EmployeeRatio - mean(EmployeeRatio))/sd(EmployeeRatio)
+# NonInterest Income / Total Assets
+NIRatio = BankData[,"Total.NonInterest.Income"]/BankData[,"Total.Assets"]
+BankData[,"NormNIRatio"] = (NIRatio - mean(NIRatio))/sd(NIRatio)
+
+ 
+```
+
+# Some Interesting Statistics for the Key Metrics
+
+Compare the values of these key variables in the data set.
+
+
+```{r summarydata}
+ 
+# some useful comparisons of the data sets
+mean(BankData[,"Total.Assets"])
+mean(BankData[,"LNAssets"])
+exp(mean(BankData[,"LNAssets"]))
+summary(BankData[,"Total.Assets"])
+summary(BankData[,"LNAssets"])
+summary(BankData[,"NormLNAssets"])
+summary(BankData[,"NormLoanAssets"])
+summary(BankData[,"NormCIRatio"])
+summary(BankData[,"NormCRERatio"])
+summary(BankData[,"NormMortRatio"])
+summary(BankData[,"NormDepositsToLiab"])
+summary(BankData[,"NormRoA"])
+
+# Summaries of the added variables
+summary(BankData[,"NormSalaryRatio"])
+summary(BankData[,"NormEmpRatio"])
+summary(BankData[,"NormNIRatio"])
+
+ 
+```
+
+# Plots for some Key Metrics
+
+Some plots of the distributions.
+
+
+```{r plottingdists, echo=FALSE}
+
+# create some plots
+library(ggplot2)
+# plotting the banks on two of the similarity axes:
+p = ggplot(BankData, aes(NormLNAssets, NormCIRatio))
+p + geom_point()
+# plotting the histogram of bank size
+q = ggplot(BankData, aes(NormLNAssets))
+q + geom_histogram(bins = 100)
+# plotting the histogram of Loan to assets ratios
+ggplot(BankData, aes(NormLoanAssets)) + geom_histogram(bins=100)
+# plotting the histogram for relative commercial portfolio size
+ggplot(BankData, aes(NormCIRatio)) + geom_histogram(bins=100)
+# plotting the histogram for relative commercial real estate portfolio size
+ggplot(BankData, aes(NormCRERatio)) + geom_histogram(bins=100)
+# plotting the histogram for relative mortgage portfolio size
+ggplot(BankData, aes(NormMortRatio)) + geom_histogram(bins=100)
+# plotting the histogram of Deposits to Liabilities ratios
+ggplot(BankData, aes(NormDepositsToLiab)) + geom_histogram(bins=100)
+# plotting the histogram of return on assets
+ggplot(BankData, aes(NormRoA)) + geom_histogram(bins=100)
+
+
+
+
+```
+
+#The Most Average Bank
+
+One of the advantages of using the normalized version of the variables, is that we can just look for the values closest to zero to find the bank with the most average results on these dimensions.  However, just looking for the minimum sum of values, can give you results where large positive deviations are compensated by large negative deviations. An easy way to avoid this problem is to look at the sum of squared values instead.
+
+
+```{r SimScore0}
+
+# Finding the most average bank:
+BankData[,"SimScore0"] = sqrt((BankData[,"NormLNAssets"])^2
+                 + (BankData[,"NormLoanAssets"])^2
+                 + (BankData[,"NormCIRatio"])^2
+                 + (BankData[,"NormCRERatio"])^2
+                 + (BankData[,"NormMortRatio"])^2
+                 + (BankData[,"NormDepositsToLiab"])^2
+                 + (BankData[,"NormRoA"])^2)
+
+BankData[BankData[,"SimScore0"]==min(BankData[,"SimScore0"]),"Financial.Institution.Name"]
+
+AvgList = BankData[order(BankData[,"SimScore0"]),]
+
+head(AvgList[,c("Financial.Institution.Name","SimScore0")], n=10)
+
+
+```
+
+
+However, all of these variables may not have the same importance. Let's define a set of variables, W, that weight each variable in our Similarity Score. In this case, we have used weights that add up to one, and have given extra wieght to the asset size, C&I portfolio, and mortgage portfolio variables. 
+
+Also, we might not care about the bank closest to average, we might care about the bank with a value closest to FHB or some other bank. Let's define a series of variables, N, that we use as a basis of comparison for our score.
+
+
+
+
+```{r SimScorewt0}
+
+# Finding the most average bank (again):
+N1 = 0
+N2 = 0
+N3 = 0
+N4 = 0
+N5 = 0
+N6 = 0
+N7 = 0
+W1 = 0.3
+W2 = 0.1
+W3 = 0.2
+W4 = 0.1
+W5 = 0.1
+W6 = 0.1
+W7 = 0.1
+
+BankData[,"SimScorewt0"] = sqrt(W1*(BankData[,"NormLNAssets"]-N1)^2
+                 + W2*(BankData[,"NormLoanAssets"]-N2)^2
+                 + W3*(BankData[,"NormCIRatio"]-N3)^2
+                 + W4*(BankData[,"NormCRERatio"]-N4)^2
+                 + W5*(BankData[,"NormMortRatio"]-N5)^2
+                 + W6*(BankData[,"NormDepositsToLiab"]-N6)^2
+                 + W7*(BankData[,"NormRoA"]-N7)^2)
+
+BankData[BankData[,"SimScorewt0"]==min(BankData[,"SimScorewt0"]),"Financial.Institution.Name"]
+
+AvgList = BankData[order(BankData[,"SimScorewt0"]),]
+
+head(AvgList[,c("Financial.Institution.Name","SimScorewt0")], n=10)
+
+# plotting the histogram of distance from average
+s = ggplot(BankData, aes(SimScorewt0))
+s + geom_histogram(bins=400)
+
+
+
+```
+
+
+Those two lists look relatively similar. It looks like a couple of banks might have changed position based on the weights assigned to the variables.
+
+#Generating a Function to Create Similarity Scores
+
+The version of similarity scores generated above looks like it could be useful and we might want to repeat this analysis choosing other basis of comparison.
+
+This function will take a data frame, a list of varialbles (columns) in the data frame to analyze, a vector of values to use for comparison (the N's from the analysis above), and a vector of wieghts to use when calculating the similarity score. This function returns a vector of simlarity score values.
+
+
+```{r SimScoreFunction}
+
+# A list of variables we will use to calcualte Similarity Scores
+SimVarList = c("NormLNAssets","NormLoanAssets","NormCIRatio","NormCRERatio",
+               "NormMortRatio","NormDepositsToLiab","NormRoA")
+MostAverage = rep(0,length(SimVarList))
+SimWeights = c(0.3,0.1,0.2,0.1,0.1,0.1,0.1)
+
+# Let's make a Similarity Score Function!
+SimScore = function(df,col_lst,simval_lst,wt_lst) {
+  value = rep(0, nrow(df))
+  for (row_i in seq(1,length(value))){
+    
+    for (i in seq(1,length(col_lst))){
+      value[row_i] = value[row_i] + wt_lst[i]*(df[row_i,col_lst[i]] -
+                                                 simval_lst[i])^2
+      
+    }
+  }
+      
+ return(sqrt(value)) 
+  
+}
+
+BankData[,"SimScoreTrial"] = SimScore(BankData,SimVarList,MostAverage,SimWeights)
+
+AvgList = BankData[order(BankData[,"SimScoreTrial"]),]
+
+head(AvgList[,c("Financial.Institution.Name","SimScorewt0","SimScoreTrial")], n=10)
+
+```
+
+The results of the test function look pretty good.  Let's go ahead and use the function to create some lists of peer banks based on similarity score.
+
+#Creating a Peer Bank List for FHB
+
+Using the similarity score function, let's find the banks most similar to First Hawaiian Bank (Index #5816 in the data frame).
+
+
+```{r FHBSimScoreRun}
+
+# Finding the bank most similar to FHB (index 5816):
+FHBIndex = 5816
+SimFHB = c(BankData[FHBIndex,"NormLNAssets"],BankData[FHBIndex,"NormLoanAssets"],
+           BankData[FHBIndex,"NormCIRatio"],BankData[FHBIndex,"NormCRERatio"],
+           BankData[FHBIndex,"NormMortRatio"],
+           BankData[FHBIndex,"NormDepositsToLiab"],BankData[FHBIndex,"NormRoA"])
+
+BankData[,"SimScoreFHB"] = SimScore(BankData,SimVarList,SimFHB,SimWeights)
+
+FHBList = BankData[order(BankData[,"SimScoreFHB"]),]
+
+head(FHBList[,c("Financial.Institution.Name","SimScoreFHB","Total.Assets")], n=11)
+
+# Plotting the results on a couple of the dimensions of interest
+ShortFHBList = head(FHBList, n=11)
+p = ggplot(BankData, aes(NormLNAssets, NormCIRatio))
+p + geom_point() + 
+  geom_point(data=ShortFHBList,aes(NormLNAssets, NormCIRatio,color="FHBSimilar"),
+             size=3) +
+  geom_point(data=BankData[5816,],aes(NormLNAssets, NormCIRatio,color="FHB"),
+             size=3) +
+  scale_color_manual(name="Legend",values = c(FHB="red",FHBSimilar="blue"))
+
+# plotting the histogram of distance from average
+ggplot(BankData, aes(SimScoreFHB)) + geom_histogram(bins=400)
+
+
+
+```
+
+Webster Bank, First Tennessee Bank (aka First Horizon National Corporation), Commerce Bank, and East West Bank are on the list of peer banks that First Hawaiian Bank uses. This list might not be weighted enough on the total assets metric, as City National Bank and CIT Bank might be considered too large for a peer of First Hawaiian Bank.
+
+#Comparison to First Hawaiian Bank Internal Peer List
+
+Here is a list of the banks on the FHB peer list and how the similarity scores look for this process.
+
+```{r FHBIntPeerList}
+
+FHBIntPeerList = BankData[c(5816,3258,2838,4124,3822,4876,1847,406,714,4669,4849,
+                            3637,4353,4272,2663,76,2539,2759,2752,5484,3294),]
+
+FHBIntPeerList[,"PeerListName"] = c("First Hawaiian Bank",
+                                    "First Horizon National Corporation",
+                                    "First Republic Bank","MB Financial Inc",
+                                    "Commerce Bancshares Inc",
+                                    "SVB Financial Group",
+                                    "Western Alliance Bancorp",
+                                    "Umpqua Holdings Corp","East West Bancorp",
+                                    "Webster Financial Corp","Bank of Hawaii",
+                                    "Territorial Bancorp",
+                                    "Central Pacific Financial Corp",
+                                    "Cullen/Frost Bankers Inc","F.N.B. Corp",
+                                    "United Bankshares Inc",
+                                    "United Bankshares Inc",
+                                    "Synovus Financial Corp","BankUnited Inc",
+                                    "Associated Banc-Corp","PacWest Bancorp")
+  
+FHBIntPeerList[order(FHBIntPeerList[,"SimScoreFHB"]),c("Financial.Institution.Name","PeerListName","SimScoreFHB")]
+
+
+```
+
+#Analysis of Other Banks
+
+Two banks that might be of interest are Bank of Hawaii (Index #4849) and Bank of the West (Index #4892)
+
+## First, for Bank of Hawaii
+
+```{r BOHSimScoreRUn}
+
+# Finding the banks most similar to BOH (index 4849):
+BOHIndex = 4849
+SimBOH = c(BankData[BOHIndex,"NormLNAssets"],BankData[BOHIndex,"NormLoanAssets"],
+           BankData[BOHIndex,"NormCIRatio"],BankData[BOHIndex,"NormCRERatio"],
+           BankData[BOHIndex,"NormMortRatio"],
+           BankData[BOHIndex,"NormDepositsToLiab"],BankData[BOHIndex,"NormRoA"])
+
+BankData[,"SimScoreBOH"] = SimScore(BankData,SimVarList,SimBOH,SimWeights)
+
+BOHList = BankData[order(BankData[,"SimScoreBOH"]),]
+
+head(BOHList[,c("Financial.Institution.Name","SimScoreBOH","Total.Assets")], n=10)
+
+# Plotting the results on a couple of the dimensions of interest
+ShortBOHList = head(BOHList, n=10)
+p = ggplot(BankData, aes(NormLNAssets, NormCIRatio))
+p + geom_point() + 
+  geom_point(data=ShortBOHList,aes(NormLNAssets, NormCIRatio,color="BOHPeers"),
+             size=3) +
+  geom_point(data=BankData[4849,],aes(NormLNAssets, NormCIRatio,color="BOH"),
+             size=3) +
+  scale_color_manual(name="Legend",values = c(BOH="red",BOHPeers="blue"))
+
+
+```
+
+## For Bank of the West
+
+```{r BOWSimScoreRUn}
+
+# Finding the banks most similar to BOW (index 4892):
+BOWIndex = 4892
+SimBOW = c(BankData[BOWIndex,"NormLNAssets"],BankData[BOWIndex,"NormLoanAssets"],
+           BankData[BOWIndex,"NormCIRatio"],BankData[BOWIndex,"NormCRERatio"],
+           BankData[BOWIndex,"NormMortRatio"],
+           BankData[BOWIndex,"NormDepositsToLiab"],BankData[BOWIndex,"NormRoA"])
+
+BankData[,"SimScoreBOW"] = SimScore(BankData,SimVarList,SimBOW,SimWeights)
+
+BOWList = BankData[order(BankData[,"SimScoreBOW"]),]
+
+head(BOWList[,c("Financial.Institution.Name","SimScoreBOW","Total.Assets")], n=10)
+
+# Plotting the results on a couple of the dimensions of interest
+ShortBOWList = head(BOWList, n=10)
+p = ggplot(BankData, aes(NormLNAssets, NormCIRatio))
+p + geom_point() + 
+  geom_point(data=ShortBOWList,aes(NormLNAssets, NormCIRatio,color="BOWPeers"),
+             size=3) +
+  geom_point(data=BankData[4892,],aes(NormLNAssets, NormCIRatio,color="BOW"),
+             size=3) +
+  scale_color_manual(name="Legend",values = c(BOW="red",BOWPeers="blue"))
+
+
+```
+
+These results do look relatively interesting, and could help inform lists of similar banking organizations using this process.
+
+# Issues 
+
+A known issue with this analysis is that certain banks can be registered seperately in several juristictions. The data would need to be manipulated to create the consolidated view of these institutions.  
+
+# Potential Improvements
+
+One potential improvement would be to consider more or other variables for this analysis.  Suggested variables include: # of Employees/Total Assets, Salary and Benefit Expense/Total Assets, and Non-Interest Income/Total Assets. As long as these variables can be identified in the data sets from the FFIEC, adding more variables to the analysis is relatively easy.
+
+Another potential improvement is to either filter the data before running the similarity scores (for example creating a larger set of peers based on regulatory limits (<\$10 billion, \$10 billion to \$50 billion, and >\$50 billion)).  Alternatively, we could move to a multi-stage analysis where the peer bank lists are created by using groups of variables to filter the global list in a series of steps.
+
+## Implementing Some of these Improvements
+
+Let's build a SimScore2 that includes three new variables: # of Employees/Total Assets, Salary and Benefit Expense/Total Assets, and Non-Interest Income/Total Assets.
+
+```{r SimScore2}
+
+# Setting up the SimScore2:
+SimVarList2 = c("NormLNAssets","NormLoanAssets","NormCIRatio","NormCRERatio",
+               "NormMortRatio","NormDepositsToLiab","NormRoA","NormSalaryRatio",
+               "NormEmpRatio","NormNIRatio")
+MostAverage2 = rep(0,length(SimVarList2))
+SimWeights2 = c(0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1)
+
+# Finding the bank most similar to FHB (index 5816):
+FHBIndex = 5816
+SimFHB2 = c(BankData[FHBIndex,"NormLNAssets"],BankData[FHBIndex,"NormLoanAssets"],
+           BankData[FHBIndex,"NormCIRatio"],BankData[FHBIndex,"NormCRERatio"],
+           BankData[FHBIndex,"NormMortRatio"],
+           BankData[FHBIndex,"NormDepositsToLiab"],BankData[FHBIndex,"NormRoA"],
+           BankData[FHBIndex,"NormSalaryRatio"],BankData[FHBIndex,"NormEmpRatio"],
+           BankData[FHBIndex,"NormNIRatio"])
+
+BankData[,"SimScoreFHB2"] = SimScore(BankData,SimVarList2,SimFHB2,SimWeights2)
+
+FHBList2 = BankData[order(BankData[,"SimScoreFHB2"]),]
+
+head(FHBList2[,c("Financial.Institution.Name","SimScoreFHB2","Total.Assets")],
+     n=11)
+
+# Plotting the results on a couple of the dimensions of interest
+ShortFHBList2 = head(FHBList2, n=11)
+p = ggplot(BankData, aes(NormLNAssets, NormCIRatio))
+p + geom_point() + 
+  geom_point(data=ShortFHBList2,aes(NormLNAssets, NormCIRatio,color="FHBSimilar2"),
+             size=3) +
+  geom_point(data=BankData[5816,],aes(NormLNAssets, NormCIRatio,color="FHB"),
+             size=3) +
+  scale_color_manual(name="Legend",values = c(FHB="red",FHBSimilar2="blue"))
+
+
+
+```
+
+That definitely reduces the influence of Total Assests on the similar bank grouping.  Let's try that again, only this time, we will increase the weight of total assets to over 3X the weight of the other variables.
+
+```{r SimScore3}
+
+# Setting up the SimScore2:
+SimVarList2 = c("NormLNAssets","NormLoanAssets","NormCIRatio","NormCRERatio",
+               "NormMortRatio","NormDepositsToLiab","NormRoA","NormSalaryRatio",
+               "NormEmpRatio","NormNIRatio")
+MostAverage2 = rep(0,length(SimVarList2))
+SimWeights3 = c(0.28,0.08,0.08,0.08,0.08,0.08,0.08,0.08,0.08,0.08)
+
+# Finding the bank most similar to FHB (index 5816):
+BankData[,"SimScoreFHB3"] = SimScore(BankData,SimVarList2,SimFHB2,SimWeights3)
+
+FHBList3 = BankData[order(BankData[,"SimScoreFHB3"]),]
+
+head(FHBList3[,c("Financial.Institution.Name","SimScoreFHB3","Total.Assets")],
+     n=11)
+
+# Plotting the results on a couple of the dimensions of interest
+ShortFHBList3 = head(FHBList3, n=11)
+p = ggplot(BankData, aes(NormLNAssets, NormCIRatio))
+p + geom_point() + 
+  geom_point(data=ShortFHBList3,aes(NormLNAssets, NormCIRatio,color="FHBSimilar3"),
+             size=3) +
+  geom_point(data=BankData[5816,],aes(NormLNAssets, NormCIRatio,color="FHB"),
+             size=3) +
+  scale_color_manual(name="Legend",values = c(FHB="red",FHBSimilar3="blue"))
+
+
+
+```
+
+
+Those weights definitely move the similar bank group closer to FHB in asset size. This is an example of how variable weights can help tailor the peer group based on the variables identified by the institution.
+
+# Clustering Analysis Example
+
+Since we have the data organized and scaled, it makes sense to look at clustering in the data and see if the clusters of bank results are helpful in identifying peer groups.
+
+## Hierarchical Clustering
+
+In a hierarchical classification the data are not partitioned into a particular number of classes or clusters based on a single step. Instead the classification consists of a series of partitions that runs from a signle cluster all the way down to each individual in its own cluster. Agglomerative hierarchical techniques produce partitions by a series of successive fusions of the individuals into groups.
+
+
+```{r HierarchicalClustering}
+
+
+# Define a subset of variables for analysis
+BankDataCluster = BankData[,SimVarList]
+# define the distance variable for analysis
+BankDataDist = dist(BankDataCluster)
+# Apply the hclust function to create the heirarchical clusters
+BankDataAverage = hclust(BankDataDist, method = 'average')
+# Plot the dendrogram of the clusters
+plot(BankDataAverage,main='Average Linkage',sub='',xlab='')
+# Define a set of hierarchal cluster with seven clusters
+BankDataAvgClust = data.frame(cutree(BankDataAverage,k=7))
+summary(BankDataAvgClust)
+
+
+```
+
+
+This gives us a way to group the banks based on heirarchical clustering into 7 classes.
+
+## k-Means Clustering
+
+The k-means clustering technique seeks to partition the data into a specified number of groups, k, by minimizing the distance between observations within each group. This means of partitioning can work well for data sets that have been stardardized, such as this one.
+
+```{r kMeansClustering}
+
+# Now let's try kmeans Clustering
+n = nrow(BankDataCluster)
+wss = rep(0,15)
+wss[1] = (n-1) * sum(apply(BankDataCluster,2,var))
+for(i in 2:15) wss[i] = sum(kmeans(BankDataCluster,centers=i)$withinss,nstart=20)
+plot(1:15,wss,type = 'b',xlab = 'Number of Groups',
+     ylab = 'Within Groups Sum of Squares')
+
+# No obvious elbows in the data, how many banks in three clusters?
+BankDataCluster_kmeans3 = kmeans(BankDataCluster, centers = 3,nstart=20)
+table(BankDataCluster_kmeans3$cluster)
+BankDataCluster_kmeans3$centers
+
+# Now analyzing five clusters
+BankDataCluster_kmeans5 = kmeans(BankDataCluster,centers = 5,nstart=20)
+table(BankDataCluster_kmeans5$cluster)
+BankDataCluster_kmeans5$centers
+
+# Now analyzing seven clusters
+BankDataCluster_kmeans7 = kmeans(BankDataCluster,centers = 7,nstart=20)
+table(BankDataCluster_kmeans7$cluster)
+BankDataCluster_kmeans7$centers
+
+
+
+```
+
+
+## Model-based Clustering
+
+Let's next try to use the model-based clustering to the bank data using the R package mclust. We use the mclust function sinde this selects both the most appropriate model for the data and the optimal number of groups based on the values of BIC computed over several models and a range of number of groups.
+
+```{r ModelClustering}
+
+# Model based clustering
+library('mclust')
+BankDataMclust = Mclust(BankDataCluster)
+print(BankDataMclust)
+plot(BankDataMclust,BankDataCluster,what='BIC')
+clPairs(BankDataCluster,classification=BankDataMclust$classification,symbols=1:7,
+        col=c('black','blue','red','green','yellow','orange','pink'))
+table(BankDataMclust$classification)
+summary(BankDataMclust, parameters = TRUE)
+
+
+
+```
+
