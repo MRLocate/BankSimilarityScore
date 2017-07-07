@@ -356,38 +356,6 @@ ggplot(BankData, aes(SimScoreFHB)) + geom_histogram(bins=400)
 
 ```
 
-Webster Bank, First Tennessee Bank (aka First Horizon National Corporation), Commerce Bank, and East West Bank are on the list of peer banks that First Hawaiian Bank uses. This list might not be weighted enough on the total assets metric, as City National Bank and CIT Bank might be considered too large for a peer of First Hawaiian Bank.
-
-#Comparison to First Hawaiian Bank Internal Peer List
-
-Here is a list of the banks on the FHB peer list and how the similarity scores look for this process.
-
-```{r FHBIntPeerList}
-
-FHBIntPeerList = BankData[c(5816,3258,2838,4124,3822,4876,1847,406,714,4669,4849,
-                            3637,4353,4272,2663,76,2539,2759,2752,5484,3294),]
-
-FHBIntPeerList[,"PeerListName"] = c("First Hawaiian Bank",
-                                    "First Horizon National Corporation",
-                                    "First Republic Bank","MB Financial Inc",
-                                    "Commerce Bancshares Inc",
-                                    "SVB Financial Group",
-                                    "Western Alliance Bancorp",
-                                    "Umpqua Holdings Corp","East West Bancorp",
-                                    "Webster Financial Corp","Bank of Hawaii",
-                                    "Territorial Bancorp",
-                                    "Central Pacific Financial Corp",
-                                    "Cullen/Frost Bankers Inc","F.N.B. Corp",
-                                    "United Bankshares Inc",
-                                    "United Bankshares Inc",
-                                    "Synovus Financial Corp","BankUnited Inc",
-                                    "Associated Banc-Corp","PacWest Bancorp")
-  
-FHBIntPeerList[order(FHBIntPeerList[,"SimScoreFHB"]),c("Financial.Institution.Name","PeerListName","SimScoreFHB")]
-
-
-```
-
 #Analysis of Other Banks
 
 Two banks that might be of interest are Bank of Hawaii (Index #4849) and Bank of the West (Index #4892)
