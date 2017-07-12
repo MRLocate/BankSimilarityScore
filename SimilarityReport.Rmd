@@ -2,11 +2,11 @@
 title: "Finding Similar Banks based on Public Data"
 author: "Mark Locatelli"
 output:
-  pdf_document:
+  html_document:
     number_sections: yes
     toc: yes
     toc_depth: 4
-  html_document:
+  pdf_document:
     number_sections: yes
     toc: yes
     toc_depth: 4
@@ -29,7 +29,7 @@ So, let us continue by loading these files and begining the analysis.
 # output go into the generated report.
 
 # set the directory for the project
-setwd("\\\\fhb/dfs/Center-Users/mlocatelli/R-Projects/SimilarityScoreBank")
+# setwd("your folder here")
   
 # read in the files from the bulk download
 FFIEC1 <- read.delim("FFIEC CDR Call Subset of Schedules 2017(1 of 2).txt")
@@ -268,8 +268,7 @@ AvgList = BankData[order(BankData[,"SimScorewt0"]),]
 head(AvgList[,c("Financial.Institution.Name","SimScorewt0")], n=10)
 
 # plotting the histogram of distance from average
-s = ggplot(BankData, aes(SimScorewt0))
-s + geom_histogram(bins=400)
+ggplot(BankData[-801,], aes(SimScorewt0)) + geom_histogram(bins=400)
 
 
 
@@ -355,6 +354,9 @@ ggplot(BankData, aes(SimScoreFHB)) + geom_histogram(bins=400)
 
 
 ```
+
+Webster Bank, First Tennessee Bank (aka First Horizon National Corporation), Commerce Bank, and East West Bank are on the list of peer banks that First Hawaiian Bank uses. This list might not be weighted enough on the total assets metric, as City National Bank and CIT Bank might be considered too large for a peer of First Hawaiian Bank.
+
 
 #Analysis of Other Banks
 
@@ -591,7 +593,122 @@ clPairs(BankDataCluster,classification=BankDataMclust$classification,symbols=1:7
 table(BankDataMclust$classification)
 summary(BankDataMclust, parameters = TRUE)
 
+#Save cluster means
+MclustMeans <- BankDataMclust$parameters['mean']
+MclustMeans <- data.frame(MclustMeans)
+MclustMeans <- data.frame(t(MclustMeans))
+row.names(MclustMeans) <- c("Cluster1", "Cluster2", "Cluster3", "Cluster4", "Cluster5", "Cluster6", "Cluster7")
+
+#Calculate non-normalized metrics
+#Assets
+LNAssets = MclustMeans[,"NormLNAssets"] *sd(BankData[,"LNAssets"]) +mean(BankData[,"LNAssets"])
+MclustMeans[,"Assets"] = exp(LNAssets)
+#Total Loan Assets
+LoansToAssets = BankData[,"Total.Loans"]/BankData[,"Total.Assets"]
+MclustMeans[,"LoanToAssets"] = (MclustMeans[,"NormLoanAssets"] * sd(LoansToAssets)) + 
+  mean(LoansToAssets)
+#CI Ratio
+CIRatio = BankData[,"CI.Loans"]/BankData[,"Total.Loans"]
+MclustMeans[,"CIRatio"] = (MclustMeans[,"NormCIRatio"] * sd(CIRatio)) + mean(CIRatio)
+#CRE Ratio
+CRERatio = BankData[,"CRE"]/BankData[,"Total.Loans"]
+MclustMeans[,"CRERatio"] = (MclustMeans[,"NormCRERatio"] * sd(CRERatio)) + mean(CRERatio)
+#Mort Ratio
+MortRatio = BankData[,"Mortgages"]/BankData[,"Total.Loans"]
+MclustMeans[,"MortRatio"] = MclustMeans[,"NormMortRatio"] * sd(MortRatio) + mean(MortRatio)
+#Deposits to Liab
+DepositsToLiab = BankData[,"Total.Deposits"]/BankData[,"Total.Liabilities"]
+MclustMeans[,"DepositsToLiab"] = MclustMeans[,"NormDepositsToLiab"] * sd(DepositsToLiab) +
+  mean(DepositsToLiab)
+#RoA
+RoA = BankData[,"Net.Income"]/BankData[,"Total.Assets"]
+MclustMeans[,"RoA"] = (MclustMeans[,"NormRoA"] * sd(RoA)) + mean(RoA)
 
 
 ```
+##Graphing and Naming Clusters
 
+Let's try graphing the means of the clusters to see if any trends emerge. Using these trends we can begin to categorize the types of banks the fall within each cluster by size, type of business, etc.
+
+```{r plottingClustMeans}
+
+#LoansToAssets vs. Assets
+p = ggplot(MclustMeans, aes(Assets, LoanToAssets))
+p + geom_text(aes(label=row.names(MclustMeans))) + scale_x_continuous(breaks = c(100000,200000,300000,400000,500000,600000,700000))
+
+#CI vs. LoansTOAssets
+#p = ggplot(MclustMeans, aes(LoanToAssets, CIRatio))
+#p + geom_text(aes(label=row.names(MclustMeans)))
+#CRE vs. LoansTOAssets
+#p = ggplot(MclustMeans, aes(LoanToAssets, CRERatio))
+#p + geom_text(aes(label=row.names(MclustMeans)))
+#Mort vs. LoansTOAssets
+#p = ggplot(MclustMeans, aes(LoanToAssets, MortRatio))
+#p + geom_text(aes(label=row.names(MclustMeans)))
+
+#LoanTypeComparision
+library(tidyr)
+library(reshape2)
+#m <- MclustMeans[,c("CIRatio","CRERatio", "MortRatio")]
+#m["Clusters"] <- c("Cluster1","Cluster2", "Cluster3", "Cluster4", "Cluster5", "Cluster6", "Cluster7")
+#m <- gather(m, LoanType, PercentTotalLoan, -Clusters)
+#m <- ggplot(m, aes(LoanType, PercentTotalLoan)) 
+#m + geom_bar(aes(fill=Clusters), stat= "identity", position= "dodge")
+
+m <- MclustMeans[,c("CIRatio","CRERatio", "MortRatio")]
+m["Clusters"] <- c("Cluster1","Cluster2", "Cluster3", "Cluster4", "Cluster5", "Cluster6", "Cluster7")
+m <- gather(m, LoanType, PercentTotalLoan, -Clusters)
+m <- ggplot(m, aes(Clusters, PercentTotalLoan)) 
+m + geom_bar(aes(fill=LoanType), stat= "identity", position= "dodge") + scale_y_continuous(breaks = c(0.2,0.4,0.6,0.8,1), limits = c(0,1))
+
+#DepositsToLiab vs. LoansTOAssets
+p = ggplot(MclustMeans, aes(row.names(MclustMeans), DepositsToLiab))
+p + geom_text(aes(label=row.names(MclustMeans)))
+
+#RoA vs. Assets
+p = ggplot(MclustMeans, aes(Assets, RoA))
+p + geom_text(aes(label=row.names(MclustMeans)))
+
+
+```
+LoanToAssets vs. Assets: The scatterplot segments the clusters by size. Cluster 2 and Cluster 6 can be grouped together as large banks. Cluster3, Cluster4, and Cluster1 can be grouped together as small-medium sized banks. Cluster7 and Cluster5 contain both contain small banks, but Cluster 7 is an outlier with almost no loans. 
+
+PercentTotalLoan vs. Clusters: The clustered bar graph breaks down the lending types of each banking cluster using C&I, CRE, and Mort loans. The result graphs the percentage each type of loans constitutes the cluster's total loan portfolio. Cluster2 and Cluster 4 emerge as commercial lending banks with high CRE to Total Loan ratios, and Cluster 3 emerges as a savings & loans/mortgage lending bank with a high Mortgage to Total Loan ratio. For other banks lending appetites may favor other types of loans that were not selected as metrics (i.e. agricultural, home equity, credit, auto).
+
+Note: C&I, CRE, and Mort loans were chosen because they constitute a significant proportion of FHB's lending portfolio. 
+
+DepositsToLiab: Cluster7 is the only cluster with majority liabilities that exist outside of deposits. 
+
+RoA: Cluster 7 has a significantly higher RoA ratio than the other clusters, possibly because of its low assets. 
+
+
+Cluster1: Small-Medium sized banks, 
+Cluster2: Large sized banks, specializing in commercial lending.
+Cluster3: Small-Medium sized banks, specializing in savings & loans/mortage lending.
+Cluster4: Small-Medium sized banks, specializing in commercial lending.
+Cluster5: Small sized banks,
+Cluster6: Large sized banks, operating in a variety of business loans
+Cluster7: Small non-traditional banks. Cluster 7 is an outlier among the other clusters with low assets, loans, and deposits. This cluster boasts a high RoA.
+
+##Finding Representative Bank
+Let's use the SimScore function we made earlier to find the banks most similar to the center of each cluster. 
+```{r bestexample}
+
+
+#Create dataframe
+BankData2 <- data.frame(BankData, BankDataMclust$classification)
+names(BankData2)[40] = paste("Cluster")
+#Return Bank closest to mean for each cluster
+for (i in 1:7) {
+  clustWt_list = c()
+  for (j in 1:7){
+    clustWt_list = c(clustWt_list,MclustMeans[i,j])  
+  }
+  BankData2[,paste("ClustSimScore",i, sep = "")] = SimScore(BankData2,SimVarList,clustWt_list,SimWeights)
+  row = which.min(abs(BankData2[,paste("ClustSimScore",i, sep = "")]))
+  print(BankData[row,c("Financial.Institution.Name")])
+}
+
+#Dataframe comparing local banks to cluster representatives
+
+```
