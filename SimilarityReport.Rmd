@@ -1,6 +1,6 @@
 ---
 title: "Finding Similar Banks based on Public Data"
-author: "Mark Locatelli"
+author: "Mark Locatelli & Cameron Haseyama"
 output:
   html_document:
     number_sections: yes
